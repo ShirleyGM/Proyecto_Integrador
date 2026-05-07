@@ -1,0 +1,60 @@
+services:
+  mongo:
+    image: mongo:7.0
+    container_name: mongo-server
+    restart: always
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=mongo_user
+      - MONGO_INITDB_ROOT_PASSWORD=mongo_pass
+      - MONGO_INITDB_DATABASE=mydatabase
+    volumes:
+      - mongodb_data_clean:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      - mongodb_network
+
+  mongo-client:
+    image: mongo-express:latest
+    container_name: mongo-client
+    restart: always
+    depends_on:
+      - mongo
+    environment:
+      - ME_CONFIG_MONGODB_SERVER=mongo
+      - ME_CONFIG_MONGODB_PORT=27017
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=mongo_user
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=mongo_pass
+      - ME_CONFIG_MONGODB_AUTH_DATABASE=admin
+    ports:
+      - "8081:8081"
+    networks:
+      - mongodb_network
+
+  python-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: python-app
+    restart: on-failure
+    privileged: true
+    user: root
+    cap_add:
+      - SYS_ADMIN
+    environment:
+      - TESSERACT_CMD=/usr/bin/tesseract
+      - HEADLESS=1
+    volumes:
+      - python_app_data:/app
+    devices:
+      - /dev/video0:/dev/video0
+    networks:
+      - mongodb_network
+    command: python main.py
+
+volumes:
+  mongodb_data_clean:
+  python_app_data:
+
+networks:
+  mongodb_network: 
