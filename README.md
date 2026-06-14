@@ -1,116 +1,186 @@
-# Reconocimiento Automático de Placas Vehiculares (ALPR) con PostgreSQL
+# Reconocimiento Automático de Placas Vehiculares (ALPR)
 
-Este proyecto implementa un sistema de reconocimiento automático de placas vehiculares usando cámara en tiempo real y almacenamiento en base de datos PostgreSQL.
+Sistema de detección y reconocimiento en tiempo real de placas vehiculares usando visión computacional, OCR y almacenamiento en MongoDB.
 
 ## Estructura del Proyecto
 
-- **main.py**: Script principal que ejecuta el sistema ALPR
-- **plate_reader.py**: Módulo para detección y reconocimiento de placas
-- **database.py**: Módulo para gestionar la conexión y operaciones con PostgreSQL
-- **requirements.txt**: Dependencias del proyecto
+- **main.py**: Script principal del sistema ALPR
+- **plate_reader.py**: Detección y OCR de placas
+- **requirements.txt**: Dependencias Python
+- **docker-compose.yml**: Servicios MongoDB + Mongo Express
+- **Dockerfile**: Imagen Docker (referencia, no se usa en Opción 1)
 
 ## Requisitos
 
-- Python 3.x
-- Tesseract OCR (https://github.com/UB-Mannheim/tesseract/wiki)
-- PostgreSQL 12+
+- Python 3.10+
+- Tesseract OCR
+- Docker Desktop y Docker Compose
 - Una cámara conectada
 
 ## Instalación
 
-1. Crea un entorno virtual:
-   ```
-   python -m venv .venv
-   ```
+### 1. Instala Tesseract OCR
 
-2. Activa el entorno virtual:
-   ```
-   .venv\Scripts\activate
-   ```
+**Windows:**
+- Descarga: https://github.com/UB-Mannheim/tesseract/wiki
+- Instala en `C:\Program Files\Tesseract-OCR`
+- O especifica la ruta en la variable `TESSERACT_CMD`
 
-3. Instala las dependencias:
-   ```
-   pip install -r requirements.txt
-   ```
-
-4. Asegúrate de que Tesseract esté instalado en `C:\Program Files\Tesseract-OCR\` (ajusta la ruta en `main.py` si es necesario).
-
-## Configuración de Base de Datos
-
-### 1. Instala PostgreSQL
-Descarga desde https://www.postgresql.org/download/windows/
-
-### 2. Crea la base de datos
-```sql
-CREATE DATABASE placas_db;
+**macOS:**
+```bash
+brew install tesseract
 ```
 
-### 3. Actualiza las credenciales en main.py
-En `main.py`, modifica los parámetros de conexión:
-```python
-db = DatabaseManager(
-    host='localhost',
-    database='placas_db',
-    user='tu_usuario',
-    password='tu_contraseña',
-    port=5432
-)
+**Linux:**
+```bash
+sudo apt-get install tesseract-ocr
 ```
+
+### 2. Configura el entorno Python
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+# o
+source .venv/bin/activate  # macOS/Linux
+
+pip install -r requirements.txt
+```
+
+### 3. Inicia MongoDB en Docker
+
+```bash
+docker-compose up -d
+```
+
+Esto inicia:
+- **MongoDB**: Puerto 27017 (credenciales: `mongo_user` / `mongo_pass`)
+- **Mongo Express**: Puerto 8081 (UI para ver datos)
 
 ## Uso
 
-Ejecuta el script:
-```
+### Ejecutar el sistema ALPR
+
+```bash
 python main.py
 ```
 
-### Funcionalidades
+**Opciones:**
+```bash
+# Modo con ventana (predeterminado en host)
+python main.py
 
-- **Detección en tiempo real**: Detecta placas vehiculares usando cámara
-- **Reconocimiento OCR**: Extrae el texto de las placas
-- **Almacenamiento automático**: Guarda cada placa detectada en PostgreSQL con:
-  - Número de placa
-  - Fecha y hora
-  - Coordenadas en la imagen
-  - Dimensiones de la región detectada
+# Procesar una imagen específica
+IMAGE_SOURCE=ruta/a/imagen.jpg python main.py
 
-### Salir de la aplicación
-Presiona 'q' para cerrar la ventana y terminar el programa.
+# Especificar fuente de cámara (si tienes múltiples)
+VIDEO_SOURCE=1 python main.py
+
+# Modo headless (sin ventana)
+HEADLESS=1 python main.py
+```
+
+**Teclas:**
+- Presiona `q` para salir (si no está en modo headless)
+
+## Base de Datos - MongoDB
+
+### Colección: `placas`
+
+Cada detección se almacena como:
+
+```json
+{
+  "_id": ObjectId("..."),
+  "numero_placa": "ABC1234",
+  "fecha_hora": "2026-05-14T10:30:45.123Z",
+  "coordenadas_x": 150,
+  "coordenadas_y": 200,
+  "ancho": 120,
+  "alto": 40,
+  "confianza": 0.95,
+  "imagen_path": "captures/ABC1234_20260514_103045.jpg"
+}
+```
+
+### Ver los datos
+
+Accede a **Mongo Express** en: http://localhost:8081
+
+- Usuario: `admin`
+- Contraseña: `mongo_pass` (por defecto en docker-compose)
+- Base de datos: `alpr_db`
+
+## Configuración
+
+### Variables de Entorno
+
+```bash
+# MongoDB
+MONGO_URI=mongodb://mongo_user:mongo_pass@localhost:27017/alpr_db
+
+# Tesseract (si no está en PATH)
+TESSERACT_CMD=/ruta/a/tesseract
+
+# Interfaz
+HEADLESS=0  # 0 = mostrar ventana, 1 = sin ventana
+
+# Cámara/Video
+VIDEO_SOURCE=0  # 0 = cámara predeterminada, "ruta/archivo.mp4" = video file
+IMAGE_SOURCE=ruta/imagen.jpg  # Procesar una imagen
+```
+
+## Solución de Problemas
+
+### "No se encontró Tesseract"
+```bash
+# Windows: Verifica la instalación o establece TESSERACT_CMD
+TESSERACT_CMD="C:\Program Files\Tesseract-OCR\tesseract.exe" python main.py
+
+# Linux/macOS: Instala tesseract-ocr
+```
+
+### "MongoDB no disponible"
+```bash
+# Verifica que Docker esté corriendo
+docker ps
+
+# Reinicia MongoDB
+docker-compose restart mongo
+```
+
+### La cámara no funciona
+```bash
+# Prueba con VIDEO_SOURCE=0 (predeterminado)
+# Si no funciona, intenta VIDEO_SOURCE=1 (segunda cámara)
+VIDEO_SOURCE=1 python main.py
+```
+
+### Permisos de cámara (macOS)
+```bash
+# Abre Configuración > Privacidad > Cámara
+# Permite que Terminal acceda a la cámara
+```
 
 ## Módulos
 
 ### plate_reader.py
-Clase `PlateReader` con métodos:
-- `detect_plates(image)`: Detecta placas en una imagen
-- `recognize_text(plate_roi)`: Realiza OCR en una región
-- `process_frame(frame)`: Procesa un frame completo y retorna las lecturas
 
-### database.py
-Clase `DatabaseManager` con métodos:
-- `connect()`: Conecta a PostgreSQL
-- `disconnect()`: Cierra la conexión
-- `create_table()`: Crea la tabla de placas
-- `insert_plate(numero_placa, coords)`: Guarda una placa
-- `get_all_plates()`: Obtiene todas las placas
-- `get_plates_by_date()`: Consulta por rango de fechas
+Clase `PlateReader`:
+- `detect_plates(image)`: Detecta regiones de placas
+- `recognize_text(plate_roi)`: OCR del texto
+- `process_frame(frame)`: Procesa un frame completo
 
-## Estructura de la Base de Datos
+### main.py
 
-```sql
-CREATE TABLE placas (
-    id SERIAL PRIMARY KEY,
-    numero_placa VARCHAR(20) NOT NULL,
-    fecha_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    coordenadas_x INTEGER,
-    coordenadas_y INTEGER,
-    ancho INTEGER,
-    alto INTEGER,
-    confianza FLOAT DEFAULT 0.0
-);
-```
+Clase `MongoDBManager`:
+- `connect()`: Conecta a MongoDB
+- `insert_plate()`: Guarda una detección
+- `close()`: Cierra la conexión
 
 ## Notas
 
-- El clasificador para placas rusas puede necesitar ajuste para otros formatos
-- Asegúrate de tener suficientes permisos en PostgreSQL
-- Tesseract debe estar en el PATH o especificar la ruta correcta
+- Las capturas se guardan en carpeta `captures/` con timestamp
+- Si MongoDB no está disponible, el sistema guarda solo localmente
+- Presiona `q` para salir (modo no-headless)
+- El clasificador de placas se optimiza mejor con imágenes de buena calidad

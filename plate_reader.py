@@ -5,16 +5,9 @@ import os
 
 class PlateReader:
     def __init__(self, tesseract_cmd=None):
-        """
-        Inicializa el lector de placas vehiculares.
-        
-        Args:
-            tesseract_cmd: Ruta a la instalación de Tesseract OCR (opcional)
-        """
-        # Si no se proporciona, buscar Tesseract automáticamente
         if not tesseract_cmd:
             tesseract_cmd = self._find_tesseract()
-        
+
         self.tesseract_available = False
         if tesseract_cmd:
             if os.path.exists(tesseract_cmd):
@@ -25,126 +18,146 @@ class PlateReader:
                 print(f"Advertencia: Tesseract-OCR no encontrado en {tesseract_cmd}. El OCR no funcionará.")
         else:
             print("Advertencia: No se especificó ruta de Tesseract. El OCR no funcionará.")
-        
-        # Usar cascada de detección de rostros como fallback para detección general
-        # Para mejores resultados, descarga una cascada específica para placas
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        self.plate_cascade = cv2.CascadeClassifier(cascade_path)
-        
-        if self.plate_cascade.empty():
-            print("Advertencia: No se pudo cargar la cascada de clasificación.")
-    
+
     def _find_tesseract(self):
-        """
-        Busca Tesseract-OCR en rutas comunes del sistema.
-        
-        Returns:
-            Ruta a tesseract.exe si se encuentra, None en caso contrario
-        """
         possible_paths = [
             r'C:\Program Files\Tesseract-OCR\tesseract.exe',
             r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
-            r'C:\Users\BITGITAL\AppData\Local\Programs\Tesseract-OCR\tesseract.exe',
+            '/usr/bin/tesseract',
+            '/usr/local/bin/tesseract',
         ]
-        
-        # Verificar si hay una variable de entorno
+
         env_path = os.getenv('TESSERACT_CMD')
         if env_path and os.path.exists(env_path):
             return env_path
-        
-        # Buscar en rutas comunes
+
         for path in possible_paths:
             if os.path.exists(path):
                 print(f"Tesseract encontrado en: {path}")
                 return path
-        
+
         return None
-    
-    def detect_plates(self, image):
+
+    def detect_plates(self, gray):
         """
-        Detecta placas en una imagen.
-        
+        Detecta placas en una imagen en escala de grises usando contornos y proporciones.
+
         Args:
-            image: Imagen de entrada (numpy array)
-            
+            gray: Imagen en escala de grises (numpy array)
+
         Returns:
-            Lista de tuplas (x, y, w, h) con las coordenadas de las placas detectadas
+            Lista de tuplas (x, y, w, h) sin solapamientos
         """
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        plates = self.plate_cascade.detectMultiScale(gray, 1.1, 4)
-        return plates
-    
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+
+        edges = cv2.Canny(enhanced, 100, 200)
+
+        # RETR_EXTERNAL: solo contornos exteriores, evita duplicados anidados
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        candidates = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < 1500:
+                continue
+
+            x, y, w, h = cv2.boundingRect(contour)
+
+            if w < 60 or h < 15:
+                continue
+
+            ratio = w / h
+            if 2.5 < ratio < 5.5:
+                candidates.append((x, y, w, h))
+
+        return self._nms(candidates)
+
+    def _nms(self, boxes, overlap_threshold=0.5):
+        """Elimina regiones solapadas, conservando la de mayor área."""
+        if not boxes:
+            return []
+
+        boxes = sorted(boxes, key=lambda b: b[2] * b[3], reverse=True)
+        kept = []
+
+        for box in boxes:
+            x1, y1, w1, h1 = box
+            dominated = False
+            for kx, ky, kw, kh in kept:
+                ix = max(0, min(x1 + w1, kx + kw) - max(x1, kx))
+                iy = max(0, min(y1 + h1, ky + kh) - max(y1, ky))
+                intersection = ix * iy
+                union = w1 * h1 + kw * kh - intersection
+                if union > 0 and intersection / union > overlap_threshold:
+                    dominated = True
+                    break
+            if not dominated:
+                kept.append(box)
+
+        return kept
+
     def recognize_text(self, plate_roi):
         """
         Realiza OCR en una región de placa.
-        
+
         Args:
-            plate_roi: Región de interés de la placa
-            
+            plate_roi: Región de interés en escala de grises
+
         Returns:
-            Texto reconocido (solo caracteres alfanuméricos)
+            Tupla (texto, confianza) donde texto es str o None y confianza es float 0–1
         """
         if not self.tesseract_available:
-            return None
-            
+            return None, 0.0
+
         try:
-            # Aplicar umbral para mejorar el OCR
-            _, plate_roi_processed = cv2.threshold(plate_roi, 150, 255, cv2.THRESH_BINARY)
-            
-            # OCR
-            text = pytesseract.image_to_string(plate_roi_processed, config='--psm 8')
-            
-            # Limpiar texto: solo alfanuméricos
-            text = ''.join(e for e in text if e.isalnum())
-            
-            return text if text else None
+            _, plate_bin = cv2.threshold(plate_roi, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+            config = '--psm 7 --oem 1 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+            data = pytesseract.image_to_data(plate_bin, config=config, output_type=pytesseract.Output.DICT)
+
+            confidences = [c for c in data['conf'] if c != -1]
+            text = ''.join(e for e in ' '.join(data['text']).strip() if e.isalnum())
+            confidence = round(sum(confidences) / len(confidences) / 100.0, 3) if confidences else 0.0
+
+            return (text if text else None), confidence
         except Exception as e:
             print(f"Error en OCR: {e}")
-            self.tesseract_available = False
-            return None
-    
+            return None, 0.0
+
     def process_frame(self, frame, draw_rectangles=True):
         """
         Procesa un frame detectando y reconociendo placas.
-        
+
         Args:
-            frame: Frame de video
+            frame: Frame de video (BGR)
             draw_rectangles: Si es True, dibuja rectángulos en las placas detectadas
-            
+
         Returns:
             Tupla (frame procesado, lista de lecturas)
-                donde cada lectura es un diccionario con:
-                - 'texto': Texto reconocido
-                - 'coords': (x, y, w, h)
-                - 'timestamp': Marca de tiempo
         """
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        plates = self.plate_cascade.detectMultiScale(gray, 1.1, 4)
-        
+        plates = self.detect_plates(gray)
+
         readings = []
-        
+
         for (x, y, w, h) in plates:
-            # Extraer la región de la placa
             plate_roi = gray[y:y+h, x:x+w]
-            
-            # Reconocer texto
-            text = self.recognize_text(plate_roi)
-            
+            text, confidence = self.recognize_text(plate_roi)
+
             if draw_rectangles:
-                # Dibujar rectángulo
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
-                
-                # Mostrar texto o indicador de placa detectada
                 display_text = text if text else "Placa detectada"
-                cv2.putText(frame, display_text, (x, y-10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
-            
+                cv2.putText(frame, display_text, (x, y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
+
             if text:
                 readings.append({
                     'texto': text,
                     'coords': (x, y, w, h),
-                    'timestamp': datetime.now()
+                    'timestamp': datetime.now(),
+                    'confianza': confidence,
                 })
-                print(f"Placa reconocida: {text}")
-        
+                print(f"Placa reconocida: {text} (confianza: {confidence:.1%})")
+
         return frame, readings
